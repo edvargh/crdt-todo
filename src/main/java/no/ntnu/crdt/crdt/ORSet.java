@@ -30,6 +30,22 @@ public class ORSet<T> {
   }
 
   /**
+   * Creates a new OR-Set replica from existing state.
+   *
+   * <p>This constructor is useful when restoring state received from another
+   * replica, for example over the network.</p>
+   *
+   * @param replicaId unique identifier for this replica
+   * @param adds existing add-tags
+   * @param removes existing remove-tags
+   */
+  public ORSet(String replicaId, Map<T, Set<String>> adds, Map<T, Set<String>> removes) {
+    this.replicaId = replicaId;
+    this.adds.putAll(copyMap(adds));
+    this.removes.putAll(copyMap(removes));
+  }
+
+  /**
    * Adds an element to the OR-Set by creating a unique tag for this add operation.
    *
    * @param element the element to add
@@ -115,5 +131,48 @@ public class ORSet<T> {
     }
 
     return result;
+  }
+
+  /**
+   * Returns the unique identifier of this replica.
+   *
+   * @return the replica id
+   */
+  public String getReplicaId() {
+    return replicaId;
+  }
+
+  /**
+   * Returns a copy of the add-tags in this OR-Set.
+   *
+   * @return a copy of the add-tags
+   */
+  public Map<T, Set<String>> getAdds() {
+    return copyMap(adds);
+  }
+
+  /**
+   * Returns a copy of the remove-tags in this OR-Set.
+   *
+   * @return a copy of the remove-tags
+   */
+  public Map<T, Set<String>> getRemoves() {
+    return copyMap(removes);
+  }
+
+  /**
+   * Creates a deep copy of a map from elements to tag sets.
+   *
+   * @param source the map to copy
+   * @return a copied map
+   */
+  private Map<T, Set<String>> copyMap(Map<T, Set<String>> source) {
+    Map<T, Set<String>> copy = new HashMap<>();
+
+    for (Map.Entry<T, Set<String>> entry : source.entrySet()) {
+      copy.put(entry.getKey(), new HashSet<>(entry.getValue()));
+    }
+
+    return copy;
   }
 }
