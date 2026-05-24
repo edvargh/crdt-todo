@@ -24,6 +24,18 @@ public class ToDoList {
   }
 
   /**
+   * Reconstructs a to do list from an existing OR-Set.
+   *
+   * <p>Used by {@link ToDoListSerializer} to restore state received over the
+   * network without going through the public add/remove API.</p>
+   *
+   * @param items the OR-Set to back this list with
+   */
+  ToDoList(ORSet<ToDoItem> items) {
+    this.items = items;
+  }
+
+  /**
    * Adds a new item to the to do list.
    *
    * @param text the text description of the item
@@ -48,6 +60,15 @@ public class ToDoList {
    */
   public Set<ToDoItem> getItems() {
     return items.value();
+  }
+
+  /**
+   * Returns the underlying CRDT used by this to do list.
+   *
+   * @return the OR-Set backing this list
+   */
+  public ORSet<ToDoItem> getItemsCrdt() {
+    return items;
   }
 
   /**
