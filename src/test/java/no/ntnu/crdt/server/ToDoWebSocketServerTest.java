@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -17,15 +18,15 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ToDoWebSocketServerTest {
 
-  private ToDoWebSocketServer server;
+  private TestServer server;
   private int port;
   private final ToDoListSerializer serializer = new ToDoListSerializer();
 
   @BeforeEach
   void startServer() throws InterruptedException {
-    server = new ToDoWebSocketServer(0);
+    server = new TestServer();
     server.start();
-    Thread.sleep(100);
+    server.waitUntilStarted();
     port = server.getPort();
   }
 
@@ -135,10 +136,53 @@ class ToDoWebSocketServerTest {
 
   private WebSocketClient buildClient(BlockingQueue<String> messages) throws Exception {
     return new WebSocketClient(new URI("ws://localhost:" + port)) {
-      @Override public void onOpen(ServerHandshake handshake) {}
-      @Override public void onMessage(String message) { messages.offer(message); }
-      @Override public void onClose(int code, String reason, boolean remote) {}
-      @Override public void onError(Exception ex) {}
+
+      @Override
+      public void onOpen(ServerHandshake handshake) {
+        // No action needed — the server sends the initial state as its first message
+      }
+
+      @Override
+      public void onMessage(String message) {
+        // add() throws if the queue rejects the message, making test failures explicit
+        messages.add(message);
+      }
+
+      @Override
+      public void onClose(int code, String reason, boolean remote) {
+        // No action needed — tests manage the client lifecycle explicitly
+      }
+
+      @Override
+      public void onError(Exception ex) {
+        throw new RuntimeException("Unexpected WebSocket error in test client", ex);
+      }
     };
+  }
+
+  /**
+   * Subclass of {@link ToDoWebSocketServer} that signals via a {@link CountDownLatch}
+   * when the server is ready to accept connections, avoiding the need for
+   * arbitrary sleeps in test setup.
+   */
+  private static class TestServer extends ToDoWebSocketServer {
+
+    private final CountDownLatch startLatch = new CountDownLatch(1);
+
+    TestServer() {
+      super(0);
+    }
+
+    @Override
+    public void onStart() {
+      super.onStart();
+      startLatch.countDown();
+    }
+
+    void waitUntilStarted() throws InterruptedException {
+      if (!startLatch.await(2, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("Server did not start within 2 seconds");
+      }
+    }
   }
 }
