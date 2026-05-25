@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -161,28 +160,14 @@ class ToDoWebSocketServerTest {
   }
 
   /**
-   * Subclass of {@link ToDoWebSocketServer} that signals via a {@link CountDownLatch}
-   * when the server is ready to accept connections, avoiding the need for
-   * arbitrary sleeps in test setup.
+   * Binds the server to port 0 so the OS assigns a free port for each test,
+   * preventing port conflicts between test runs. Ready-signalling is handled
+   * by {@link ToDoWebSocketServer#waitUntilStarted()}.
    */
   private static class TestServer extends ToDoWebSocketServer {
 
-    private final CountDownLatch startLatch = new CountDownLatch(1);
-
     TestServer() {
       super(0);
-    }
-
-    @Override
-    public void onStart() {
-      super.onStart();
-      startLatch.countDown();
-    }
-
-    void waitUntilStarted() throws InterruptedException {
-      if (!startLatch.await(2, TimeUnit.SECONDS)) {
-        throw new IllegalStateException("Server did not start within 2 seconds");
-      }
     }
   }
 }

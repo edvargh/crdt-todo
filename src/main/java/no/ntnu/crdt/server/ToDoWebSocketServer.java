@@ -8,6 +8,8 @@ import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -26,6 +28,7 @@ public class ToDoWebSocketServer extends WebSocketServer {
 
   private final ToDoList serverState = new ToDoList("server");
   private final ToDoListSerializer serializer = new ToDoListSerializer();
+  private final CountDownLatch startLatch = new CountDownLatch(1);
 
   /**
    * Creates a new WebSocket server bound to the given port.
@@ -109,10 +112,26 @@ public class ToDoWebSocketServer extends WebSocketServer {
   }
 
   /**
-   * Logs when the server has successfully started and is ready to accept connections.
+   * Signals that the server is ready to accept connections and logs the event.
+   *
+   * <p>Counts down the internal {@link CountDownLatch} so that callers of
+   * {@link #waitUntilStarted()} are unblocked.</p>
    */
   @Override
   public void onStart() {
     LOGGER.info("WebSocket server started");
+    startLatch.countDown();
+  }
+
+  /**
+   * Blocks until the server has fully started and is ready to accept connections.
+   *
+   * @throws InterruptedException if the thread is interrupted while waiting
+   * @throws IllegalStateException if the server does not start within 5 seconds
+   */
+  public void waitUntilStarted() throws InterruptedException {
+    if (!startLatch.await(5, TimeUnit.SECONDS)) {
+      throw new IllegalStateException("WebSocket server did not start within 5 seconds");
+    }
   }
 }
