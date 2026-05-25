@@ -8,6 +8,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -50,6 +51,7 @@ public class ClientPane extends VBox {
   private final ListView<ToDoItem> listView = new ListView<>();
   private final TextField textField = new TextField();
   private final Button addButton = new Button("Add");
+  private final Button editButton = new Button("Edit");
   private final Button removeButton = new Button("Remove");
   private final Button toggleButton = new Button("Disconnect");
   private final Label statusLabel = new Label("● Connected");
@@ -83,7 +85,7 @@ public class ClientPane extends VBox {
       @Override
       protected void updateItem(ToDoItem item, boolean empty) {
         super.updateItem(item, empty);
-        setText(empty || item == null ? null : item.getText());
+        setText(empty || item == null ? null : todoList.getText(item.getId()));
       }
     });
 
@@ -91,9 +93,10 @@ public class ClientPane extends VBox {
     textField.setOnAction(e -> addItem());
     HBox.setHgrow(textField, Priority.ALWAYS);
     addButton.setOnAction(e -> addItem());
+    editButton.setOnAction(e -> editSelectedItem());
     removeButton.setOnAction(e -> removeSelectedItem());
 
-    HBox inputRow = new HBox(5, textField, addButton, removeButton);
+    HBox inputRow = new HBox(5, textField, addButton, editButton, removeButton);
 
     getChildren().addAll(header, listView, inputRow);
     setPadding(new Insets(12));
@@ -112,6 +115,24 @@ public class ClientPane extends VBox {
     textField.clear();
     refreshListView();
     sendState();
+  }
+
+  private void editSelectedItem() {
+    ToDoItem selected = listView.getSelectionModel().getSelectedItem();
+    if (selected == null) {
+      return;
+    }
+    TextInputDialog dialog = new TextInputDialog(todoList.getText(selected.getId()));
+    dialog.setTitle("Edit item");
+    dialog.setHeaderText(null);
+    dialog.setContentText("New text:");
+    dialog.showAndWait().ifPresent(newText -> {
+      if (!newText.isBlank()) {
+        todoList.editItem(selected.getId(), newText);
+        refreshListView();
+        sendState();
+      }
+    });
   }
 
   private void removeSelectedItem() {
@@ -188,7 +209,7 @@ public class ClientPane extends VBox {
   private void refreshListView() {
     listView.getItems().setAll(
         todoList.getItems().stream()
-            .sorted(Comparator.comparing(ToDoItem::getText))
+            .sorted(Comparator.comparing(item -> todoList.getText(item.getId())))
             .toList()
     );
   }
