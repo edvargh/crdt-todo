@@ -59,10 +59,8 @@ public class ORSet<T> {
 
   /**
    * Removes an element from the OR-Set by marking all locally observed add-tags
-   * for that element as removed.
-   *
-   * <p>The element is not deleted from the add-set. This is important because
-   * CRDT replicas need the add-tags and remove-tags to merge correctly later.</p>
+   * as removed. The element remains in the add-set, as both maps are required
+   * for correct merging.
    *
    * @param element the element to remove
    */

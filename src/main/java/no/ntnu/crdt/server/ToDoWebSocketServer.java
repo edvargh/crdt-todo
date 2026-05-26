@@ -14,13 +14,12 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * WebSocket server for synchronizing CRDT to do list state across clients.
+ * WebSocket server for synchronizing CRDT to-do list state across clients.
  *
- * <p>The server maintains its own {@link ToDoList} replica that accumulates
- * the merged state from all connected clients. When a client connects it
- * immediately receives the current server state. When a client sends its
- * state the server merges it in and broadcasts the result to every connected
- * client, completing the state-based CRDT sync cycle.</p>
+ * <p>The server maintains its own {@link ToDoList} replica. When a client
+ * connects it immediately receives the current server state. When a client
+ * sends its state, the server merges it in and broadcasts the result to all
+ * connected clients.</p>
  */
 public class ToDoWebSocketServer extends WebSocketServer {
 
@@ -42,8 +41,9 @@ public class ToDoWebSocketServer extends WebSocketServer {
   /**
    * Sends the current server state to a newly connected client.
    *
-   * <p>This ensures the client is immediately up to date with all changes
-   * that were made before it connected.</p>
+   * <p>Acquiring the lock on {@code serverState} before serializing prevents a race
+   * with a concurrent {@link #onMessage} call that may be merging new client state
+   * at the same time.</p>
    *
    * @param conn      the new client connection
    * @param handshake the client handshake details
@@ -52,7 +52,9 @@ public class ToDoWebSocketServer extends WebSocketServer {
   public void onOpen(WebSocket conn, ClientHandshake handshake) {
     LOGGER.log(Level.INFO, "Client connected: {0}", conn.getRemoteSocketAddress());
     try {
-      conn.send(serializer.serialize(serverState));
+      synchronized (serverState) {
+        conn.send(serializer.serialize(serverState));
+      }
     } catch (JsonProcessingException e) {
       LOGGER.log(Level.SEVERE, "Failed to serialize server state for new client", e);
     }
@@ -72,17 +74,14 @@ public class ToDoWebSocketServer extends WebSocketServer {
   }
 
   /**
-   * Merges incoming client state into the server state and broadcasts the result.
-   *
-   * <p>The message is expected to be a JSON-serialized {@link no.ntnu.crdt.dto.ToDoListStateDto}.
-   * After merging, the updated server state is broadcast to all connected clients,
-   * including the sender, so every replica converges to the same value.</p>
+   * Merges incoming client state into the server state and broadcasts the result
+   * to all connected clients, including the sender.
    *
    * <p>The merge and broadcast are performed inside a {@code synchronized} block
    * to prevent concurrent messages from corrupting the shared server state.</p>
    *
    * @param conn    the client connection that sent the message
-   * @param message the JSON-serialized to do list state from the client
+   * @param message the JSON-serialized to-do list state
    */
   @Override
   public void onMessage(WebSocket conn, String message) {
@@ -112,10 +111,9 @@ public class ToDoWebSocketServer extends WebSocketServer {
   }
 
   /**
-   * Signals that the server is ready to accept connections and logs the event.
+   * Signals that the server is ready to accept connections.
    *
-   * <p>Counts down the internal {@link CountDownLatch} so that callers of
-   * {@link #waitUntilStarted()} are unblocked.</p>
+   * <p>Releases the latch checked by {@link #waitUntilStarted()}.</p>
    */
   @Override
   public void onStart() {

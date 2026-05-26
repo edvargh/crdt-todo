@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import org.junit.jupiter.api.Test;
 
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -32,8 +33,8 @@ class ToDoListSerializerTest {
 
     assertEquals("clientB", restored.getItemsCrdt().getReplicaId());
     Set<String> texts = restored.getItems().stream()
-        .map(ToDoItem::getText)
-        .collect(java.util.stream.Collectors.toSet());
+        .map(item -> restored.getText(item.getId()))
+        .collect(Collectors.toSet());
     assertTrue(texts.contains("Walk the dog"));
   }
 
@@ -45,7 +46,7 @@ class ToDoListSerializerTest {
 
     // Remove Task A so its tags appear in the removes map
     ToDoItem taskA = original.getItems().stream()
-        .filter(i -> i.getText().equals("Task A"))
+        .filter(i -> original.getText(i.getId()).equals("Task A"))
         .findFirst()
         .orElseThrow();
     original.removeItem(taskA);
@@ -55,13 +56,58 @@ class ToDoListSerializerTest {
 
     // Only Task B should be visible after the remove
     Set<String> visibleTexts = restored.getItems().stream()
-        .map(ToDoItem::getText)
-        .collect(java.util.stream.Collectors.toSet());
+        .map(item -> restored.getText(item.getId()))
+        .collect(Collectors.toSet());
     assertFalse(visibleTexts.contains("Task A"), "Removed item should not be visible");
     assertTrue(visibleTexts.contains("Task B"), "Non-removed item should still be visible");
 
     // Both adds and removes maps must be non-empty so a future merge can converge correctly
     assertFalse(restored.getItemsCrdt().getAdds().isEmpty(), "Adds map must be preserved");
     assertFalse(restored.getItemsCrdt().getRemoves().isEmpty(), "Removes map must be preserved");
+  }
+
+  @Test
+  void roundTripShouldPreserveTextRegisterAfterEdit() throws JsonProcessingException {
+    ToDoList original = new ToDoList("clientA");
+    original.addItem("Original text");
+
+    ToDoItem item = original.getItems().iterator().next();
+    original.editItem(item.getId(), "Edited text");
+
+    String json = serializer.serialize(original);
+    ToDoList restored = serializer.deserialize(json);
+
+    assertEquals("Edited text", restored.getText(item.getId()),
+        "Edited text should survive a serialize/deserialize round-trip");
+  }
+
+  @Test
+  void roundTripShouldPreserveTextRegisterTimestamp() throws JsonProcessingException {
+    // ListA and ListB start with the same item via merge
+    ToDoList listA = new ToDoList("clientA");
+    listA.addItem("Initial");
+
+    ToDoList listB = new ToDoList("clientB");
+    listB.merge(listA);
+
+    ToDoItem item = listA.getItems().iterator().next();
+    String itemId = item.getId();
+
+    // ListA edits twice (timestamp = 2); ListB edits once (timestamp = 1 — stale)
+    listA.editItem(itemId, "A's first edit");  // A: timestamp = 1
+    listA.editItem(itemId, "A's final edit");  // A: timestamp = 2
+    listB.editItem(itemId, "B's stale edit");  // B: timestamp = 1
+
+    // Round-trip ListA — the timestamp=2 must survive serialization
+    String json = serializer.serialize(listA);
+    ToDoList restored = serializer.deserialize(json);
+
+    // Merge the stale ListB (timestamp=1) into the restored list (timestamp=2).
+    // If the timestamp was not preserved (e.g. reset to 0), B's timestamp=1
+    // would incorrectly win and overwrite A's final edit.
+    restored.merge(listB);
+
+    assertEquals("A's final edit", restored.getText(itemId),
+        "Higher timestamp must survive round-trip so stale remote edits cannot overwrite it");
   }
 }
