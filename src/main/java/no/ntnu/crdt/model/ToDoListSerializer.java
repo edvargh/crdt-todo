@@ -29,6 +29,11 @@ import java.util.stream.Collectors;
  */
 public class ToDoListSerializer {
 
+  /** Creates a new {@code ToDoListSerializer} with a default Jackson {@link ObjectMapper}. */
+  public ToDoListSerializer() {
+    // default constructor
+  }
+
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   /**
