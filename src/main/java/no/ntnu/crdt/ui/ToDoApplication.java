@@ -20,6 +20,11 @@ public class ToDoApplication extends Application {
 
   private ToDoWebSocketServer server;
 
+  /** Creates a new {@code ToDoApplication} instance (called by the JavaFX runtime). */
+  public ToDoApplication() {
+    // default constructor required by JavaFX
+  }
+
   /**
    * Starts the WebSocket server, waits until it is ready, then opens the main window
    * with two client panes side by side.
