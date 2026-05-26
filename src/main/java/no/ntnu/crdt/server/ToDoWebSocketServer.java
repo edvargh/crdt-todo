@@ -95,7 +95,8 @@ public class ToDoWebSocketServer extends WebSocketServer {
         broadcast(merged);
       }
     } catch (JsonProcessingException e) {
-      LOGGER.log(Level.WARNING, "Failed to process message from {0}", conn.getRemoteSocketAddress());
+      LOGGER.log(Level.WARNING,
+          "Failed to process message from " + conn.getRemoteSocketAddress(), e);
     }
   }
 

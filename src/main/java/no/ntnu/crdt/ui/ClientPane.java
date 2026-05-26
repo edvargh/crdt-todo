@@ -11,6 +11,9 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.TextField;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.TransferMode;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
@@ -23,6 +26,7 @@ import org.java_websocket.handshake.ServerHandshake;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Comparator;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -38,6 +42,9 @@ import java.util.logging.Logger;
  * disconnected, local changes accumulate in the {@link ToDoList}. On reconnect the
  * accumulated state is sent to the server, which merges it with any changes made by
  * other clients in the meantime.</p>
+ *
+ * <p>Items can be reordered by drag and drop. Dropping onto a row inserts above it;
+ * dropping below all rows moves the item to the end.</p>
  */
 public class ClientPane extends VBox {
 
@@ -82,36 +89,38 @@ public class ClientPane extends VBox {
     HBox header = new HBox(10, titleLabel, statusLabel, toggleButton);
     header.setAlignment(Pos.CENTER_LEFT);
 
-    listView.setCellFactory(lv -> new ListCell<>() {
-      private final CheckBox checkBox = new CheckBox();
-      private final Label label = new Label();
-      private final HBox cellBox = new HBox(8, checkBox, label);
+    listView.setCellFactory(lv -> new ToDoItemCell(this));
 
-      {
-        cellBox.setAlignment(Pos.CENTER_LEFT);
-        checkBox.setOnAction(e -> {
-          ToDoItem item = getItem();
-          if (item != null) {
-            todoList.setFinished(item.getId(), checkBox.isSelected());
+    // dropped below all cells: move dragged item to the end
+    listView.setOnDragOver(event -> {
+      if (event.getDragboard().hasString()) {
+        event.acceptTransferModes(TransferMode.MOVE);
+      }
+      event.consume();
+    });
+
+    listView.setOnDragDropped(event -> {
+      Dragboard db = event.getDragboard();
+      boolean success = false;
+
+      if (db.hasString()) {
+        String draggedId = db.getString();
+        List<ToDoItem> currentItems = listView.getItems();
+
+        if (!currentItems.isEmpty()) {
+          ToDoItem lastItem = currentItems.get(currentItems.size() - 1);
+          // Skip if the dragged item is already the last one
+          if (!lastItem.getId().equals(draggedId)) {
+            todoList.moveItem(draggedId, todoList.getPosition(lastItem.getId()), null);
             refreshListView();
             sendState();
+            success = true;
           }
-        });
-      }
-
-      @Override
-      protected void updateItem(ToDoItem item, boolean empty) {
-        super.updateItem(item, empty);
-        if (empty || item == null) {
-          setGraphic(null);
-        } else {
-          boolean finished = todoList.getFinished(item.getId());
-          checkBox.setSelected(finished);
-          label.setText(todoList.getText(item.getId()));
-          label.setStyle(finished ? "-fx-strikethrough: true; -fx-text-fill: gray;" : "");
-          setGraphic(cellBox);
         }
       }
+
+      event.setDropCompleted(success);
+      event.consume();
     });
 
     textField.setPromptText("New item...");
@@ -244,9 +253,7 @@ public class ClientPane extends VBox {
   private void refreshListView() {
     listView.getItems().setAll(
         todoList.getItems().stream()
-            .sorted(Comparator
-                .comparing((ToDoItem item) -> todoList.getFinished(item.getId()))
-                .thenComparing(item -> todoList.getText(item.getId())))
+            .sorted(Comparator.comparingDouble(item -> todoList.getPosition(item.getId())))
             .toList()
     );
   }
@@ -255,5 +262,100 @@ public class ClientPane extends VBox {
     statusLabel.setText(text);
     statusLabel.setStyle("-fx-text-fill: " + color + ";");
     toggleButton.setText(buttonLabel);
+  }
+
+  // --- inner classes ---
+
+  /**
+   * A list cell that renders a to-do item with a checkbox and drag-and-drop support.
+   */
+  private static final class ToDoItemCell extends ListCell<ToDoItem> {
+
+    private final ClientPane pane;
+    private final CheckBox checkBox = new CheckBox();
+    private final Label label = new Label();
+    private final HBox cellBox = new HBox(8, checkBox, label);
+
+    ToDoItemCell(ClientPane pane) {
+      this.pane = pane;
+      cellBox.setAlignment(Pos.CENTER_LEFT);
+
+      checkBox.setOnAction(e -> {
+        ToDoItem item = getItem();
+        if (item != null) {
+          pane.todoList.setFinished(item.getId(), checkBox.isSelected());
+          pane.refreshListView();
+          pane.sendState();
+        }
+      });
+
+      // drag source: put the dragged item's UUID onto the dragboard
+      setOnDragDetected(event -> {
+        if (getItem() == null) {
+          return;
+        }
+        Dragboard db = startDragAndDrop(TransferMode.MOVE);
+        ClipboardContent content = new ClipboardContent();
+        content.putString(getItem().getId());
+        db.setContent(content);
+        event.consume();
+      });
+
+      // accept only on non-empty cells; empty cells let the event bubble to the ListView
+      setOnDragOver(event -> {
+        if (getItem() != null
+            && event.getGestureSource() != this
+            && event.getDragboard().hasString()) {
+          event.acceptTransferModes(TransferMode.MOVE);
+          event.consume();
+        }
+      });
+
+      // drop: insert above this cell; bail if cell is empty
+      setOnDragDropped(event -> {
+        if (getItem() == null) {
+          return;
+        }
+        Dragboard db = event.getDragboard();
+        boolean success = false;
+
+        if (db.hasString()) {
+          String draggedId = db.getString();
+          ToDoItem targetItem = getItem();
+
+          if (!targetItem.getId().equals(draggedId)) {
+            List<ToDoItem> currentItems = pane.listView.getItems();
+            int targetIndex = currentItems.indexOf(targetItem);
+
+            Double prevPos = targetIndex > 0
+                ? pane.todoList.getPosition(currentItems.get(targetIndex - 1).getId())
+                : null;
+            Double nextPos = pane.todoList.getPosition(targetItem.getId());
+
+            pane.todoList.moveItem(draggedId, prevPos, nextPos);
+            pane.refreshListView();
+            pane.sendState();
+            success = true;
+          }
+        }
+
+        event.setDropCompleted(success);
+        event.consume();
+      });
+    }
+
+    @Override
+    protected void updateItem(ToDoItem item, boolean empty) {
+      super.updateItem(item, empty);
+      if (empty || item == null) {
+        setGraphic(null);
+      } else {
+        boolean finished = pane.todoList.getFinished(item.getId());
+        checkBox.setSelected(finished);
+        label.setText(pane.todoList.getText(item.getId()));
+        label.setStyle(finished ? "-fx-strikethrough: true; -fx-text-fill: gray;" : "");
+        setGraphic(cellBox);
+      }
+    }
   }
 }

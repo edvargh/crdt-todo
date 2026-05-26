@@ -2,10 +2,11 @@ package no.ntnu.crdt.model;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import no.ntnu.crdt.crdt.LWWRegister;
-import no.ntnu.crdt.crdt.ORSet;
+import no.ntnu.crdt.core.LWWRegister;
+import no.ntnu.crdt.core.ORSet;
 import no.ntnu.crdt.dto.FinishedRegisterEntryDto;
 import no.ntnu.crdt.dto.ORSetEntryDto;
+import no.ntnu.crdt.dto.PositionRegisterEntryDto;
 import no.ntnu.crdt.dto.TextRegisterEntryDto;
 import no.ntnu.crdt.dto.ToDoItemDto;
 import no.ntnu.crdt.dto.ToDoListStateDto;
@@ -24,15 +25,10 @@ import java.util.stream.Collectors;
  * {@code Map<ToDoItem, Set<String>>} as JSON object keys.</p>
  *
  * <p>The serialized payload contains both the full OR-Set tag maps (for CRDT
- * existence merging) and the LWW-Register state for every item's text field
- * (for CRDT text merging).</p>
+ * existence merging) and the LWW-Register state for every item's text field,
+ * finished status, and fractional position.</p>
  */
 public class ToDoListSerializer {
-
-  /** Creates a new {@code ToDoListSerializer} with a default Jackson {@link ObjectMapper}. */
-  public ToDoListSerializer() {
-    // default constructor
-  }
 
   private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -51,7 +47,7 @@ public class ToDoListSerializer {
             e.getKey(),
             e.getValue().read(),
             e.getValue().getTimestamp(),
-            e.getValue().getReplicaId()
+            e.getValue().getWriterReplicaId()
         ))
         .toList();
 
@@ -60,7 +56,16 @@ public class ToDoListSerializer {
             e.getKey(),
             e.getValue().read(),
             e.getValue().getTimestamp(),
-            e.getValue().getReplicaId()
+            e.getValue().getWriterReplicaId()
+        ))
+        .toList();
+
+    List<PositionRegisterEntryDto> positionRegisterDtos = list.getPositionRegisters().entrySet().stream()
+        .map(e -> new PositionRegisterEntryDto(
+            e.getKey(),
+            e.getValue().read(),
+            e.getValue().getTimestamp(),
+            e.getValue().getWriterReplicaId()
         ))
         .toList();
 
@@ -69,7 +74,8 @@ public class ToDoListSerializer {
         toEntryDtos(crdt.getAdds()),
         toEntryDtos(crdt.getRemoves()),
         textRegisterDtos,
-        finishedRegisterDtos
+        finishedRegisterDtos,
+        positionRegisterDtos
     );
 
     return objectMapper.writeValueAsString(dto);
@@ -78,8 +84,11 @@ public class ToDoListSerializer {
   /**
    * Deserializes a to-do list from a JSON string.
    *
-   * <p>Missing {@code textRegisters} or {@code finishedRegisters} fields are treated
-   * as empty maps.</p>
+   * <p>All six fields in the payload are expected to be present. Missing register
+   * lists ({@code textRegisters}, {@code finishedRegisters}, {@code positionRegisters})
+   * are treated as empty. Missing {@code adds} or {@code removes} are also treated as
+   * empty, but omitting them from a valid CRDT message will cause incorrect merge
+   * behaviour since causality information is lost.</p>
    *
    * @param json JSON produced by {@link #serialize}
    * @return the reconstructed to-do list
@@ -88,8 +97,10 @@ public class ToDoListSerializer {
   public ToDoList deserialize(String json) throws JsonProcessingException {
     ToDoListStateDto dto = objectMapper.readValue(json, ToDoListStateDto.class);
 
-    Map<ToDoItem, Set<String>> adds = fromEntryDtos(dto.adds());
-    Map<ToDoItem, Set<String>> removes = fromEntryDtos(dto.removes());
+    List<ORSetEntryDto> addEntries = dto.adds() != null ? dto.adds() : List.of();
+    List<ORSetEntryDto> removeEntries = dto.removes() != null ? dto.removes() : List.of();
+    Map<ToDoItem, Set<String>> adds = fromEntryDtos(addEntries);
+    Map<ToDoItem, Set<String>> removes = fromEntryDtos(removeEntries);
     ORSet<ToDoItem> crdt = new ORSet<>(dto.replicaId(), adds, removes);
 
     List<TextRegisterEntryDto> textDtos = dto.textRegisters() != null
@@ -116,7 +127,19 @@ public class ToDoListSerializer {
       );
     }
 
-    return new ToDoList(crdt, textRegisters, finishedRegisters);
+    List<PositionRegisterEntryDto> positionDtos = dto.positionRegisters() != null
+        ? dto.positionRegisters()
+        : List.of();
+
+    Map<String, LWWRegister<Double>> positionRegisters = new HashMap<>();
+    for (PositionRegisterEntryDto entry : positionDtos) {
+      positionRegisters.put(
+          entry.itemId(),
+          new LWWRegister<>(entry.value(), entry.timestamp(), entry.replicaId())
+      );
+    }
+
+    return new ToDoList(crdt, textRegisters, finishedRegisters, positionRegisters);
   }
 
   // --- private helpers ---

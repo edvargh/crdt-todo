@@ -82,6 +82,40 @@ class ToDoListSerializerTest {
   }
 
   @Test
+  void roundTripShouldPreservePositionAfterMove() throws JsonProcessingException {
+    ToDoList original = new ToDoList("clientA");
+    original.addItem("Alpha"); // position 1.0
+    original.addItem("Beta");  // position 2.0
+    original.addItem("Gamma"); // position 3.0
+
+    // Move Gamma between Alpha and Beta → position should become 1.5
+    ToDoItem gamma = original.getItems().stream()
+        .filter(i -> original.getText(i.getId()).equals("Gamma"))
+        .findFirst()
+        .orElseThrow();
+    ToDoItem alpha = original.getItems().stream()
+        .filter(i -> original.getText(i.getId()).equals("Alpha"))
+        .findFirst()
+        .orElseThrow();
+    ToDoItem beta = original.getItems().stream()
+        .filter(i -> original.getText(i.getId()).equals("Beta"))
+        .findFirst()
+        .orElseThrow();
+
+    original.moveItem(gamma.getId(),
+        original.getPosition(alpha.getId()),
+        original.getPosition(beta.getId()));
+
+    double expectedPos = original.getPosition(gamma.getId());
+
+    String json = serializer.serialize(original);
+    ToDoList restored = serializer.deserialize(json);
+
+    assertEquals(expectedPos, restored.getPosition(gamma.getId()), 1e-10,
+        "Fractional position must survive a serialize/deserialize round-trip");
+  }
+
+  @Test
   void roundTripShouldPreserveTextRegisterTimestamp() throws JsonProcessingException {
     // ListA and ListB start with the same item via merge
     ToDoList listA = new ToDoList("clientA");

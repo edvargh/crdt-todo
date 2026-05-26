@@ -16,7 +16,7 @@ import no.ntnu.crdt.server.ToDoWebSocketServer;
  */
 public class ToDoApplication extends Application {
 
-  private static final int PORT = 8080;
+  private static final int PORT = 8083;
 
   private ToDoWebSocketServer server;
 

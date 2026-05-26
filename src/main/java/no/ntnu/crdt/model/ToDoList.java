@@ -1,35 +1,27 @@
 package no.ntnu.crdt.model;
 
-import no.ntnu.crdt.crdt.LWWRegister;
-import no.ntnu.crdt.crdt.ORSet;
+import no.ntnu.crdt.core.LWWRegister;
+import no.ntnu.crdt.core.ORSet;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
- * Represents a replicated to-do list backed by two CRDTs.
+ * A replicated to-do list backed by two CRDTs.
  *
- * <ul>
- *   <li>An {@link ORSet} tracks which items exist (add-wins on concurrent add/remove).</li>
- *   <li>A map of {@link LWWRegister} instances tracks the current text of every item
- *       (last-write-wins on concurrent edits), keyed by item UUID.</li>
- *   <li>A second map of {@link LWWRegister} instances tracks the finished status of
- *       every item (last-write-wins on concurrent toggles), keyed by item UUID.</li>
- * </ul>
- *
- * <p>The CRDTs are kept separate on purpose: the OR-Set's internal
- * {@code Map<ToDoItem, Set<String>>} uses item identity (UUID) as the key and knows
- * nothing about mutable properties. Merging it automatically would silently discard
- * any register state embedded inside an item object. The registers are therefore
- * merged independently in {@link #merge(ToDoList)}.</p>
+ * <p>An {@link ORSet} tracks which items exist. Three maps of {@link LWWRegister}
+ * track text, finished state, and position for each item, all keyed by item UUID.
+ * The registers are merged independently of the set in {@link #merge(ToDoList)}.</p>
  */
 public class ToDoList {
 
   private final ORSet<ToDoItem> items;
   private final Map<String, LWWRegister<String>> textRegisters;
   private final Map<String, LWWRegister<Boolean>> finishedRegisters;
+  private final Map<String, LWWRegister<Double>> positionRegisters;
 
   /**
    * Creates a new to-do list replica.
@@ -40,37 +32,45 @@ public class ToDoList {
     this.items = new ORSet<>(replicaId);
     this.textRegisters = new HashMap<>();
     this.finishedRegisters = new HashMap<>();
+    this.positionRegisters = new HashMap<>();
   }
 
   /**
-   * Reconstructs a to-do list from an existing OR-Set, text registers, and finished
-   * registers.
+   * Restores a to-do list from existing CRDT state. Used by {@link ToDoListSerializer}.
    *
-   * <p>Used by {@link ToDoListSerializer} to restore state received over the
-   * network without going through the public add/edit/remove API.</p>
-   *
-   * @param items             the OR-Set backing item existence
-   * @param textRegisters     the LWW-Registers for item text, keyed by item UUID
-   * @param finishedRegisters the LWW-Registers for item finished status, keyed by item UUID
+   * @param items             the item OR-Set
+   * @param textRegisters     text registers keyed by item UUID
+   * @param finishedRegisters finished-state registers keyed by item UUID
+   * @param positionRegisters position registers keyed by item UUID
    */
   ToDoList(ORSet<ToDoItem> items,
            Map<String, LWWRegister<String>> textRegisters,
-           Map<String, LWWRegister<Boolean>> finishedRegisters) {
+           Map<String, LWWRegister<Boolean>> finishedRegisters,
+           Map<String, LWWRegister<Double>> positionRegisters) {
     this.items = items;
     this.textRegisters = new HashMap<>(textRegisters);
     this.finishedRegisters = new HashMap<>(finishedRegisters);
+    this.positionRegisters = new HashMap<>(positionRegisters);
   }
 
   /**
-   * Adds a new item to the to-do list and creates a text register for it.
+   * Adds a new item to the list. The item is placed after all currently visible items.
    *
-   * @param text the text description of the item
+   * @param text the item text
    */
   public void addItem(String text) {
     ToDoItem item = new ToDoItem();
     items.add(item);
     textRegisters.put(item.getId(), new LWWRegister<>(text, items.getReplicaId()));
     finishedRegisters.put(item.getId(), new LWWRegister<>(false, items.getReplicaId()));
+
+    double nextPosition = items.value().stream()
+        .map(visible -> positionRegisters.get(visible.getId()))
+        .filter(Objects::nonNull)
+        .mapToDouble(LWWRegister::read)
+        .max()
+        .orElse(0.0) + 1.0;
+    positionRegisters.put(item.getId(), new LWWRegister<>(nextPosition, items.getReplicaId()));
   }
 
   /**
@@ -83,12 +83,9 @@ public class ToDoList {
   }
 
   /**
-   * Updates the text of an existing item via its LWW-Register.
+   * Updates the text of an item.
    *
-   * <p>The write is attributed to the local replica and will beat any remote
-   * write with a lower timestamp during the next merge.</p>
-   *
-   * @param itemId  the UUID of the item to edit
+   * @param itemId  UUID of the item
    * @param newText the new text
    */
   public void editItem(String itemId, String newText) {
@@ -99,14 +96,10 @@ public class ToDoList {
   }
 
   /**
-   * Returns the current text for an item, read from its LWW-Register.
+   * Returns the text of an item, or an empty string if not found.
    *
-   * <p>Returns an empty string if no register exists for the given id.
-   * Under normal operation this should not occur, as every item added via
-   * {@link #addItem(String)} gets a register immediately.</p>
-   *
-   * @param itemId the UUID of the item
-   * @return the current text, or an empty string if the item is unknown
+   * @param itemId UUID of the item
+   * @return the current text
    */
   public String getText(String itemId) {
     LWWRegister<String> register = textRegisters.get(itemId);
@@ -114,13 +107,10 @@ public class ToDoList {
   }
 
   /**
-   * Marks an existing item as finished or unfinished via its LWW-Register.
+   * Sets the finished state of an item.
    *
-   * <p>The write is attributed to the local replica and will beat any remote
-   * write with a lower timestamp during the next merge.</p>
-   *
-   * @param itemId   the UUID of the item to update
-   * @param finished {@code true} to mark the item as finished, {@code false} to unmark it
+   * @param itemId   UUID of the item
+   * @param finished {@code true} to mark as finished, {@code false} to unmark
    */
   public void setFinished(String itemId, boolean finished) {
     LWWRegister<Boolean> register = finishedRegisters.get(itemId);
@@ -130,18 +120,43 @@ public class ToDoList {
   }
 
   /**
-   * Returns whether an item is currently marked as finished, read from its LWW-Register.
+   * Returns whether an item is finished, or {@code false} if not found.
    *
-   * <p>Returns {@code false} if no register exists for the given id. Under normal
-   * operation this should not occur, as every item added via {@link #addItem(String)}
-   * gets a finished register immediately.</p>
-   *
-   * @param itemId the UUID of the item
-   * @return {@code true} if the item is finished, {@code false} otherwise
+   * @param itemId UUID of the item
+   * @return {@code true} if the item is marked as finished
    */
   public boolean getFinished(String itemId) {
     LWWRegister<Boolean> register = finishedRegisters.get(itemId);
     return register != null && register.read();
+  }
+
+  /**
+   * Moves an item to the midpoint between {@code prevPosition} and {@code nextPosition}.
+   * Pass {@code null} for either to move to the start or end of the list.
+   *
+   * @param itemId       UUID of the item
+   * @param prevPosition position of the item above the gap, or {@code null}
+   * @param nextPosition position of the item below the gap, or {@code null}
+   */
+  public void moveItem(String itemId, Double prevPosition, Double nextPosition) {
+    LWWRegister<Double> register = positionRegisters.get(itemId);
+    if (register == null) {
+      return;
+    }
+    double prev = prevPosition != null ? prevPosition : 0.0;
+    double next = nextPosition != null ? nextPosition : prev + 2.0;
+    register.write((prev + next) / 2.0, items.getReplicaId());
+  }
+
+  /**
+   * Returns the position of an item, or {@code 0.0} if not found.
+   *
+   * @param itemId UUID of the item
+   * @return the fractional position
+   */
+  public double getPosition(String itemId) {
+    LWWRegister<Double> register = positionRegisters.get(itemId);
+    return register != null ? register.read() : 0.0;
   }
 
   /**
@@ -154,11 +169,11 @@ public class ToDoList {
   }
 
   /**
-   * Returns the underlying OR-Set CRDT used for item existence.
+   * Returns the underlying OR-Set. Used by {@link ToDoListSerializer}.
    *
-   * @return the OR-Set backing this list
+   * @return the item OR-Set
    */
-  public ORSet<ToDoItem> getItemsCrdt() {
+  ORSet<ToDoItem> getItemsCrdt() {
     return items;
   }
 
@@ -181,47 +196,41 @@ public class ToDoList {
   }
 
   /**
-   * Merges another to-do list replica into this one.
+   * Returns an unmodifiable view of the position registers, keyed by item UUID.
    *
-   * <p>Both the OR-Set (item existence) and the LWW-Registers (item text) are
-   * merged. Registers for items that are new to this replica are copied in full;
-   * registers for items that already exist are merged via
-   * {@link LWWRegister#merge(LWWRegister)}.</p>
+   * @return the position registers
+   */
+  public Map<String, LWWRegister<Double>> getPositionRegisters() {
+    return Collections.unmodifiableMap(positionRegisters);
+  }
+
+  /**
+   * Merges another replica into this one.
+   * The OR-Set and all three register maps are merged independently.
    *
-   * @param other the other to-do list replica
+   * @param other the replica to merge in
    */
   public void merge(ToDoList other) {
     items.merge(other.items);
+    mergeRegisterMap(textRegisters, other.textRegisters);
+    mergeRegisterMap(finishedRegisters, other.finishedRegisters);
+    mergeRegisterMap(positionRegisters, other.positionRegisters);
+  }
 
-    for (Map.Entry<String, LWWRegister<String>> entry : other.textRegisters.entrySet()) {
+  /**
+   * Merges register entries from {@code remote} into {@code local}.
+   */
+  private <V> void mergeRegisterMap(
+      Map<String, LWWRegister<V>> local,
+      Map<String, LWWRegister<V>> remote) {
+    for (Map.Entry<String, LWWRegister<V>> entry : remote.entrySet()) {
       String itemId = entry.getKey();
-      LWWRegister<String> otherRegister = entry.getValue();
-
-      LWWRegister<String> localRegister = textRegisters.get(itemId);
-      if (localRegister != null) {
-        localRegister.merge(otherRegister);
+      LWWRegister<V> remoteReg = entry.getValue();
+      LWWRegister<V> localReg = local.get(itemId);
+      if (localReg != null) {
+        localReg.merge(remoteReg);
       } else {
-        textRegisters.put(itemId, new LWWRegister<>(
-            otherRegister.read(),
-            otherRegister.getTimestamp(),
-            otherRegister.getReplicaId()
-        ));
-      }
-    }
-
-    for (Map.Entry<String, LWWRegister<Boolean>> entry : other.finishedRegisters.entrySet()) {
-      String itemId = entry.getKey();
-      LWWRegister<Boolean> otherRegister = entry.getValue();
-
-      LWWRegister<Boolean> localRegister = finishedRegisters.get(itemId);
-      if (localRegister != null) {
-        localRegister.merge(otherRegister);
-      } else {
-        finishedRegisters.put(itemId, new LWWRegister<>(
-            otherRegister.read(),
-            otherRegister.getTimestamp(),
-            otherRegister.getReplicaId()
-        ));
+        local.put(itemId, LWWRegister.copyOf(remoteReg));
       }
     }
   }
