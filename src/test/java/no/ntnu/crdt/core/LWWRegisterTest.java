@@ -1,4 +1,4 @@
-package no.ntnu.crdt.crdt;
+package no.ntnu.crdt.core;
 
 import org.junit.jupiter.api.Test;
 
@@ -110,6 +110,6 @@ class LWWRegisterTest {
 
     assertEquals("restored value", register.read());
     assertEquals(5L, register.getTimestamp());
-    assertEquals("clientA", register.getReplicaId());
+    assertEquals("clientA", register.getWriterReplicaId());
   }
 }

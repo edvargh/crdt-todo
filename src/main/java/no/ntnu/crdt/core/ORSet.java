@@ -1,4 +1,4 @@
-package no.ntnu.crdt.crdt;
+package no.ntnu.crdt.core;
 
 import java.util.*;
 
@@ -9,8 +9,7 @@ import java.util.*;
  * unique tag containing the replica id. Remove operations do not delete elements
  * directly. Instead, they mark the locally observed add-tags as removed.</p>
  *
- * <p>Two replicas can be merged by unioning their add-tags and remove-tags.
- * This allows replicas to eventually converge to the same visible value.</p>
+ * <p>Two replicas are merged by taking the union of their add-tags and remove-tags.</p>
  *
  * @param <T> the type of elements stored in the set
  */

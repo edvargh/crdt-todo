@@ -1,4 +1,4 @@
-package no.ntnu.crdt.crdt;
+package no.ntnu.crdt.core;
 
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +41,27 @@ class ORSetTest {
     assertEquals(replicaA.value(), replicaB.value());
     assertTrue(replicaA.value().contains("milk"));
     assertTrue(replicaA.value().contains("bread"));
+  }
+
+  @Test
+  void addWinsOverConcurrentRemove() {
+    // Both replicas start from the same state
+    ORSet<String> replicaA = new ORSet<>("clientA");
+    ORSet<String> replicaB = new ORSet<>("clientB");
+    replicaA.add("milk");
+    replicaB.merge(replicaA);
+
+    // A removes concurrently while B re-adds (a new tag, so this is genuinely concurrent)
+    replicaA.remove("milk");
+    replicaB.add("milk"); // produces a new tag unknown to A
+
+    // Merge in both directions
+    replicaA.merge(replicaB);
+    replicaB.merge(replicaA);
+
+    // B's add-tag was not in A's remove-set, so "milk" must survive on both replicas
+    assertTrue(replicaA.value().contains("milk"), "Add should win over concurrent remove on A");
+    assertTrue(replicaB.value().contains("milk"), "Add should win over concurrent remove on B");
   }
 
   @Test

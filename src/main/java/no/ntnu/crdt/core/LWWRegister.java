@@ -1,4 +1,4 @@
-package no.ntnu.crdt.crdt;
+package no.ntnu.crdt.core;
 
 /**
  * A state-based Last-Write-Wins Register (LWW-Register) CRDT.
@@ -19,18 +19,18 @@ public class LWWRegister<T> {
 
   private T value;
   private long timestamp;
-  private String replicaId;
+  private String writerReplicaId;
 
   /**
    * Creates a new LWW-Register with an initial value and timestamp 0.
    *
    * @param initialValue the initial value stored in the register
-   * @param replicaId    id of the replica creating this register
+   * @param replicaId    id of the replica performing the initial write
    */
   public LWWRegister(T initialValue, String replicaId) {
     this.value = initialValue;
     this.timestamp = 0;
-    this.replicaId = replicaId;
+    this.writerReplicaId = replicaId;
   }
 
   /**
@@ -45,7 +45,21 @@ public class LWWRegister<T> {
   public LWWRegister(T value, long timestamp, String replicaId) {
     this.value = value;
     this.timestamp = timestamp;
-    this.replicaId = replicaId;
+    this.writerReplicaId = replicaId;
+  }
+
+  /**
+   * Returns a copy of {@code source} with the same value, timestamp, and replica id.
+   *
+   * <p>Use this instead of manually replicating the constructor arguments when
+   * copying a register during a merge.</p>
+   *
+   * @param <T>    the value type
+   * @param source the register to copy
+   * @return a new register equal in state to {@code source}
+   */
+  public static <T> LWWRegister<T> copyOf(LWWRegister<T> source) {
+    return new LWWRegister<>(source.read(), source.getTimestamp(), source.getWriterReplicaId());
   }
 
   /**
@@ -57,7 +71,7 @@ public class LWWRegister<T> {
   public void write(T newValue, String replicaId) {
     this.timestamp++;
     this.value = newValue;
-    this.replicaId = replicaId;
+    this.writerReplicaId = replicaId;
   }
 
   /**
@@ -73,11 +87,11 @@ public class LWWRegister<T> {
   public void merge(LWWRegister<T> other) {
     boolean otherWins = other.timestamp > this.timestamp
         || (other.timestamp == this.timestamp
-            && other.replicaId.compareTo(this.replicaId) > 0);
+            && other.writerReplicaId.compareTo(this.writerReplicaId) > 0);
 
     if (otherWins) {
       this.value = other.value;
-      this.replicaId = other.replicaId;
+      this.writerReplicaId = other.writerReplicaId;
     }
 
     this.timestamp = Math.max(this.timestamp, other.timestamp);
@@ -104,9 +118,9 @@ public class LWWRegister<T> {
   /**
    * Returns the replica id of the last writer.
    *
-   * @return the replica id
+   * @return the replica id of whoever last wrote this register
    */
-  public String getReplicaId() {
-    return replicaId;
+  public String getWriterReplicaId() {
+    return writerReplicaId;
   }
 }

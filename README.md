@@ -7,17 +7,17 @@
 **CRDT Todo** is a collaborative to-do list application that demonstrates the use of
 Conflict-free Replicated Data Types (CRDTs) in a client-server architecture.
 
-Multiple clients can edit the same to-do list simultaneously — even while fully
-disconnected from the server — and their states will always converge to a consistent
+Multiple clients can edit the same to-do list simultaneously, even while fully
+disconnected from the server, and their states will always converge to a consistent
 result when they reconnect and sync. No manual conflict resolution is required, and no
 edit is ever silently discarded by the synchronisation mechanism itself.
 
 The application is a proof-of-concept built in Java 21. It features:
 
-- A WebSocket server that acts as the central synchronisation hub
+- A WebSocket server that all clients sync with
 - A JavaFX desktop UI with two independent client panes displayed side by side, so
-  concurrent edits and convergence can be observed interactively in a single window
-- Two hand-written CRDT implementations that compose together to back the full
+  concurrent edits and convergence can be observed in a single window
+- Two CRDT implementations that compose together to back the full
   to-do list model
 
 The project does **not** use any existing CRDT library. Both `ORSet` and `LWWRegister`
@@ -29,7 +29,7 @@ are implemented from scratch.
 
 ### CRDTs
 
-#### ORSet — Observed-Remove Set (`crdt/ORSet.java`)
+#### ORSet — Observed-Remove Set (`core/ORSet.java`)
 
 A state-based set CRDT with **add-wins** semantics on concurrent add/remove operations.
 
@@ -41,7 +41,7 @@ merge by taking the union of both their add-sets and remove-sets.
 Key property: if replica A removes an item at the same moment replica B adds it (neither
 has seen the other's operation), the item will be present after merge. Add wins.
 
-#### LWWRegister — Last-Write-Wins Register (`crdt/LWWRegister.java`)
+#### LWWRegister — Last-Write-Wins Register (`core/LWWRegister.java`)
 
 A state-based single-value register CRDT. Every write is stamped with a monotonically
 increasing logical timestamp and the writing replica's ID. On merge, the entry with the
@@ -61,15 +61,24 @@ always produce a strictly higher timestamp than any pre-merge value.
 | Item existence | `ORSet<ToDoItem>` | Add-wins on concurrent add/remove |
 | Item text | `Map<id, LWWRegister<String>>` | Last write wins on concurrent edits |
 | Item finished state | `Map<id, LWWRegister<Boolean>>` | Last write wins on concurrent toggles |
+| Item position | `Map<id, LWWRegister<Double>>` | Last write wins on concurrent reorders |
 
 Item identity (UUID) is kept strictly separate from item properties. The ORSet knows
-nothing about text or finished state; those are tracked independently in per-item
-registers. This avoids the classic mistake of embedding mutable state inside a set
-element, which would break merge semantics.
+nothing about text, finished state, or position; those are tracked independently in
+per-item registers. Embedding mutable state inside a set element would break merge semantics.
+
+#### Fractional indexing for ordering
+
+Each item has a position stored in a `LWWRegister<Double>`. New items get the next
+integer position (1.0, 2.0, 3.0 …). Moving an item between two others with positions
+`p1` and `p2` sets it to `(p1 + p2) / 2`, so no other items need to be renumbered.
+
+If two replicas move different items into the same gap, ties are broken by item UUID.
+If they move the same item, the higher LWW timestamp wins.
 
 ### Serialisation (`model/ToDoListSerializer.java`)
 
-Full CRDT state — including all internal add-tags, remove-tags, and register timestamps —
+Full CRDT state, including all internal add-tags, remove-tags, and register timestamps, 
 is serialised to JSON via Jackson and transmitted over WebSocket. This means any replica
 can fully reconstruct its CRDT state from a received message without losing causality
 information.
@@ -92,14 +101,17 @@ concurrent WebSocket callbacks safely.
 ### User Interface (`ui/ToDoApplication.java`, `ui/ClientPane.java`)
 
 The JavaFX UI starts the WebSocket server and opens a single window split into two
-independent client panes — **Client A** (port 8080) and **Client B** (also port 8080) —
+independent client panes — **Client A** (port 8083) and **Client B** (also port 8083) —
 each with its own `ToDoList` replica and WebSocket connection.
 
 Each pane provides:
 
-- A live `ListView` of current items, with a checkbox for finished state and
-  strikethrough styling on finished items
+- A live `ListView` of current items, sorted by user-controlled position
+- A checkbox for finished state
 - **Add**, **Edit**, and **Remove** buttons
+- **Drag-and-drop reordering** — drag any row to a new position; dropping onto a row
+  inserts the dragged item above it, and dropping onto empty space below all rows moves
+  it to the end
 - A coloured connection status indicator (green / red)
 - A **Disconnect / Reconnect** toggle for simulating network partitions
 
@@ -113,8 +125,8 @@ reconnect, demonstrating offline-first behaviour and eventual consistency.
 | Limitation | Description |
 |---|---|
 | **Session-scoped logical clock** | `LWWRegister` timestamps start at `0` on every restart. If a client restarts and re-writes an item, the new write has a lower timestamp than any pre-restart write from another replica that hasn't been synced yet, potentially losing the new write silently. Fix: initialise the clock from `System.currentTimeMillis()`. |
-| **No deterministic item ordering** | `ORSet.value()` returns a `HashSet`. Items can appear in a different order after each sync. Fix: sort by item creation timestamp before rendering. |
-| **Orphaned registers** | Text and finished registers for removed items are never pruned from `ToDoList`. They accumulate indefinitely. Fix: after merge, remove any register key not present in `ORSet.value()`. |
+| **Fractional index precision** | Repeatedly inserting into the same gap halves the available space each time (1.5 → 1.25 → 1.125 …). After many moves into the same narrow gap, `double` precision is exhausted. Fix: use variable-length rational identifiers (e.g. the LSEQ approach). |
+| **Orphaned registers** | Text, finished, and position registers for removed items are never pruned from `ToDoList`. They accumulate indefinitely. Fix: after merge, remove any register key not present in `ORSet.value()`. |
 | **Full-state sync** | The entire CRDT state is sent on every update. For large lists this becomes inefficient. Fix: delta-state CRDTs that only transmit the changed portion. |
 | **Single server** | The server is a single point of failure. A true peer-to-peer topology would allow clients to sync directly with each other. |
 | **No persistence** | All state is in-memory. The server and clients lose their state on restart. Fix: serialise state to disk after every merge. |
@@ -129,7 +141,7 @@ reconnect, demonstrating offline-first behaviour and eventual consistency.
 | [Java-WebSocket](https://github.com/TooTallNate/Java-WebSocket) | 1.5.6 | Provides the WebSocket server and client implementation. Used in `ToDoWebSocketServer` and `ClientPane` to handle real-time bidirectional communication between clients and server. |
 | [Jackson Databind](https://github.com/FasterXML/jackson-databind) | 2.18.6 | JSON serialisation and deserialisation. Used in `ToDoListSerializer` to convert the full CRDT state (including internal add-tags, remove-tags, and register timestamps) to/from JSON for transmission over WebSocket. |
 | [JavaFX Controls](https://openjfx.io/) | 21 | UI toolkit. Used to build the interactive desktop application with `ListView`, buttons, labels, and split-pane layout. |
-| [JUnit Jupiter](https://junit.org/junit5/) | 5.10.2 | Unit testing framework. Used for all 36 tests covering CRDT semantics, domain model behaviour, serialisation round-trips, and WebSocket server integration. |
+| [JUnit Jupiter](https://junit.org/junit5/) | 5.10.2 | Unit testing framework. Used for all 46 tests covering CRDT semantics, domain model behaviour, serialisation round-trips, and WebSocket server integration. |
 
 Build tooling: **Apache Maven 3** with the Maven Surefire Plugin (test runner) and the
 JavaFX Maven Plugin (application launcher).
@@ -147,7 +159,7 @@ JavaFX Maven Plugin (application launcher).
 
 ```bash
 # Clone the repository
-git clone https://github.com/edvargh/crdt-todo.git
+git clone https://github.com/edvargh/crdt-todo
 cd crdt-todo
 
 # Build and download dependencies
@@ -165,13 +177,25 @@ mvn javafx:run
 ```
 
 A window opens with **Client A** on the left and **Client B** on the right. Both are
-connected to the WebSocket server running on `localhost:8080`.
+connected to the WebSocket server running on `localhost:8083`.
 
 ### Trying out CRDT behaviour
 
 **Basic sync**
 1. Type a task name in Client A's text field and click **Add**
 2. The item appears in Client B's list automatically via the server broadcast
+
+**Reordering items**
+1. Click and hold any row in the list
+2. Drag it to the desired position
+3. Drop it onto another row to insert above that row, or drop onto the empty space
+   below all rows to move it to the end
+4. The new order is synced to the other client immediately
+
+**Concurrent reorders**
+1. Click **Disconnect** on both clients
+2. Drag items to different positions on each client independently
+3. Click **Reconnect** — the move with the higher timestamp wins for each item
 
 **Concurrent edits**
 1. Click **Disconnect** on both clients
@@ -201,15 +225,15 @@ The property is verified directly at the CRDT level in `ORSetTest`
 mvn test
 ```
 
-All 36 unit tests are run. Test classes:
+All 46 unit tests are run. Test classes:
 
 | Test class | What it covers |
 |---|---|
-| `ORSetTest` | Add, remove, merge, add-wins semantics, state restoration, copy safety |
+| `ORSetTest` | Add, remove, merge, add-wins on concurrent add/remove (`addWinsOverConcurrentRemove`), state restoration, copy safety |
 | `LWWRegisterTest` | Read, write, merge with various timestamp scenarios, tie-breaking by replica ID, state restoration |
 | `ToDoItemTest` | UUID generation, equality by ID, hash consistency |
-| `ToDoListTest` | Add/remove/edit items, merge, timestamp-based conflict resolution |
-| `ToDoListSerializerTest` | Round-trip serialisation, full CRDT state preservation including timestamps |
+| `ToDoListTest` | Add/remove/edit/move items, finished state, merge, timestamp-based conflict resolution, position register semantics |
+| `ToDoListSerializerTest` | Round-trip serialisation, full CRDT state preservation including timestamps and fractional positions |
 | `ToDoWebSocketServerTest` | Client connect/receive state, broadcast to all clients, reconnection behaviour |
 
 ---
@@ -225,9 +249,27 @@ mvn javadoc:javadoc
 The output is written to `target/reports/apidocs/index.html`. Open it with:
 
 ```bash
+# Windows
 start target/reports/apidocs/index.html
+
+# macOS
+open target/reports/apidocs/index.html
+
+# Linux
+xdg-open target/reports/apidocs/index.html
 ```
 
 All public classes and methods carry Javadoc comments.
 
 ---
+
+## References
+
+The CRDT algorithms implemented in this project are based on the following sources:
+
+- **Wikipedia.** *Conflict-free replicated data type.*
+  [https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type](https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type)
+
+- **Kleppmann, M. (2020).**
+  *CRDTs: The Hard Parts.* Talk given at Strange Loop.
+  [https://www.youtube.com/watch?v=x7drE24geUw](https://www.youtube.com/watch?v=x7drE24geUw)
