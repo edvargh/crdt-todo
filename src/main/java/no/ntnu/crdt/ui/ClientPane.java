@@ -5,6 +5,7 @@ import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -82,10 +83,34 @@ public class ClientPane extends VBox {
     header.setAlignment(Pos.CENTER_LEFT);
 
     listView.setCellFactory(lv -> new ListCell<>() {
+      private final CheckBox checkBox = new CheckBox();
+      private final Label label = new Label();
+      private final HBox cellBox = new HBox(8, checkBox, label);
+
+      {
+        cellBox.setAlignment(Pos.CENTER_LEFT);
+        checkBox.setOnAction(e -> {
+          ToDoItem item = getItem();
+          if (item != null) {
+            todoList.setFinished(item.getId(), checkBox.isSelected());
+            refreshListView();
+            sendState();
+          }
+        });
+      }
+
       @Override
       protected void updateItem(ToDoItem item, boolean empty) {
         super.updateItem(item, empty);
-        setText(empty || item == null ? null : todoList.getText(item.getId()));
+        if (empty || item == null) {
+          setGraphic(null);
+        } else {
+          boolean finished = todoList.getFinished(item.getId());
+          checkBox.setSelected(finished);
+          label.setText(todoList.getText(item.getId()));
+          label.setStyle(finished ? "-fx-strikethrough: true; -fx-text-fill: gray;" : "");
+          setGraphic(cellBox);
+        }
       }
     });
 
@@ -162,17 +187,27 @@ public class ClientPane extends VBox {
         @Override
         public void onOpen(ServerHandshake handshake) {
           // Send accumulated local state immediately so the server can merge
-          // any changes made while this client was offline
-          sendState();
-          Platform.runLater(() -> setStatus("● Connected", "green", "Disconnect"));
+          // any changes made while this client was offline.
+          // Both sendState() and setStatus() must run on the JavaFX thread
+          // because sendState() reads todoList, which is otherwise only touched
+          // from the JavaFX thread.
+          Platform.runLater(() -> {
+            sendState();
+            setStatus("● Connected", "green", "Disconnect");
+          });
         }
 
         @Override
         public void onMessage(String message) {
           try {
+            // Deserialize on the WebSocket thread (no shared state touched).
+            // The merge and refresh must run on the JavaFX thread because
+            // todoList is not thread-safe and all other accesses happen there.
             ToDoList received = serializer.deserialize(message);
-            todoList.merge(received);
-            Platform.runLater(ClientPane.this::refreshListView);
+            Platform.runLater(() -> {
+              todoList.merge(received);
+              refreshListView();
+            });
           } catch (JsonProcessingException e) {
             LOGGER.log(Level.WARNING, "Failed to deserialize incoming state", e);
           }
@@ -209,7 +244,9 @@ public class ClientPane extends VBox {
   private void refreshListView() {
     listView.getItems().setAll(
         todoList.getItems().stream()
-            .sorted(Comparator.comparing(item -> todoList.getText(item.getId())))
+            .sorted(Comparator
+                .comparing((ToDoItem item) -> todoList.getFinished(item.getId()))
+                .thenComparing(item -> todoList.getText(item.getId())))
             .toList()
     );
   }

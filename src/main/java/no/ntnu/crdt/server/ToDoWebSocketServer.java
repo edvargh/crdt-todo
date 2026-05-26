@@ -41,6 +41,10 @@ public class ToDoWebSocketServer extends WebSocketServer {
   /**
    * Sends the current server state to a newly connected client.
    *
+   * <p>Acquiring the lock on {@code serverState} before serializing prevents a race
+   * with a concurrent {@link #onMessage} call that may be merging new client state
+   * at the same time.</p>
+   *
    * @param conn      the new client connection
    * @param handshake the client handshake details
    */
@@ -48,7 +52,9 @@ public class ToDoWebSocketServer extends WebSocketServer {
   public void onOpen(WebSocket conn, ClientHandshake handshake) {
     LOGGER.log(Level.INFO, "Client connected: {0}", conn.getRemoteSocketAddress());
     try {
-      conn.send(serializer.serialize(serverState));
+      synchronized (serverState) {
+        conn.send(serializer.serialize(serverState));
+      }
     } catch (JsonProcessingException e) {
       LOGGER.log(Level.SEVERE, "Failed to serialize server state for new client", e);
     }

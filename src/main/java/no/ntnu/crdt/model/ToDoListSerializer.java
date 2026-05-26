@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import no.ntnu.crdt.crdt.LWWRegister;
 import no.ntnu.crdt.crdt.ORSet;
+import no.ntnu.crdt.dto.FinishedRegisterEntryDto;
 import no.ntnu.crdt.dto.ORSetEntryDto;
 import no.ntnu.crdt.dto.TextRegisterEntryDto;
 import no.ntnu.crdt.dto.ToDoItemDto;
@@ -49,11 +50,21 @@ public class ToDoListSerializer {
         ))
         .toList();
 
+    List<FinishedRegisterEntryDto> finishedRegisterDtos = list.getFinishedRegisters().entrySet().stream()
+        .map(e -> new FinishedRegisterEntryDto(
+            e.getKey(),
+            e.getValue().read(),
+            e.getValue().getTimestamp(),
+            e.getValue().getReplicaId()
+        ))
+        .toList();
+
     ToDoListStateDto dto = new ToDoListStateDto(
         crdt.getReplicaId(),
         toEntryDtos(crdt.getAdds()),
         toEntryDtos(crdt.getRemoves()),
-        textRegisterDtos
+        textRegisterDtos,
+        finishedRegisterDtos
     );
 
     return objectMapper.writeValueAsString(dto);
@@ -62,10 +73,8 @@ public class ToDoListSerializer {
   /**
    * Deserializes a to-do list from a JSON string.
    *
-   * <p>If the {@code textRegisters} field is absent (messages from older clients
-   * that predate LWW-Register support), the registers map is treated as empty
-   * and {@link ToDoList#getText(String)} will return an empty string for those
-   * items until a replica with register state is merged in.</p>
+   * <p>Missing {@code textRegisters} or {@code finishedRegisters} fields are treated
+   * as empty maps.</p>
    *
    * @param json JSON produced by {@link #serialize}
    * @return the reconstructed to-do list
@@ -90,7 +99,19 @@ public class ToDoListSerializer {
       );
     }
 
-    return new ToDoList(crdt, textRegisters);
+    List<FinishedRegisterEntryDto> finishedDtos = dto.finishedRegisters() != null
+        ? dto.finishedRegisters()
+        : List.of();
+
+    Map<String, LWWRegister<Boolean>> finishedRegisters = new HashMap<>();
+    for (FinishedRegisterEntryDto entry : finishedDtos) {
+      finishedRegisters.put(
+          entry.itemId(),
+          new LWWRegister<>(entry.value(), entry.timestamp(), entry.replicaId())
+      );
+    }
+
+    return new ToDoList(crdt, textRegisters, finishedRegisters);
   }
 
   // --- private helpers ---
